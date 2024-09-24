@@ -9,6 +9,10 @@ import org.springframework.core.io.ResourceLoader;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.core.io.support.ResourcePatternResolver;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
@@ -35,17 +39,25 @@ public class DataLoaderService {
     @Autowired
     private ResourceLoader resourceLoader;
 
+    private static final Logger logger = LoggerFactory.getLogger(DataLoaderService.class);
+
+
     /**
      * Loads cities from a file and saves them to the database.
      * @param filePath Path to the cities data file.
      */
     public void loadCities(String filePath) {
+        logger.info("Starting to load cities from file: {}", filePath);
         try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
             String line;
-            // Skip header
-            br.readLine();
+            int lineNumber = 1;
             while ((line = br.readLine()) != null) {
+                lineNumber++;
                 String[] tokens = line.split(",");
+                if (tokens.length < 7) {
+                    logger.warn("Invalid line at {}: {}", lineNumber, line);
+                    continue;
+                }
                 City city = new City();
                 city.setUbigeo(tokens[0]);
                 city.setDepartment(tokens[1]);
@@ -55,29 +67,40 @@ public class DataLoaderService {
                 city.setRegion(tokens[5]);
                 city.setWarehouseCapacity(Integer.parseInt(tokens[6]));
                 cityRepository.save(city);
+                logger.debug("Saved city: {}", city);
             }
+            logger.info("Finished loading cities from file: {}", filePath);
         } catch (IOException e) {
-            e.printStackTrace();
+            logger.error("Error reading cities file: {}", filePath, e);
+        } catch (Exception e) {
+            logger.error("Error processing cities file: {}", filePath, e);
         }
     }
+    
 
     /**
      * Loads road segments from a file and saves them to the database.
      * @param filePath Path to the road segments data file.
      */
     public void loadRoadSegments(String filePath) {
+        logger.info("Starting to load road segments from file: {}", filePath);
         try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
             String line;
-            // No header to skip in this file
+            int lineNumber = 0;
             while ((line = br.readLine()) != null) {
+                lineNumber++;
                 // Assuming format: UG-Ori => UG-Des
                 String[] tokens = line.split("=>");
+                if (tokens.length != 2) {
+                    logger.warn("Invalid line at {}: {}", lineNumber, line);
+                    continue;
+                }
                 String originUbigeo = tokens[0].trim();
                 String destinationUbigeo = tokens[1].trim();
-
+    
                 City origin = cityRepository.findById(originUbigeo).orElse(null);
                 City destination = cityRepository.findById(destinationUbigeo).orElse(null);
-
+    
                 if (origin != null && destination != null) {
                     RoadSegment rs = new RoadSegment();
                     rs.setOrigin(origin);
@@ -86,12 +109,22 @@ public class DataLoaderService {
                     rs.setSpeedLimit(getSpeedLimit(origin.getRegion(), destination.getRegion()));
                     rs.setCost(0); // Initial cost, can be updated later
                     roadSegmentRepository.save(rs);
+                    logger.debug("Saved road segment: {} => {}", originUbigeo, destinationUbigeo);
+                } else {
+                    if (origin == null) {
+                        logger.warn("Origin city not found for UBIGEO: {} at line {}", originUbigeo, lineNumber);
+                    }
+                    if (destination == null) {
+                        logger.warn("Destination city not found for UBIGEO: {} at line {}", destinationUbigeo, lineNumber);
+                    }
                 }
             }
+            logger.info("Finished loading road segments from file: {}", filePath);
         } catch (IOException e) {
-            e.printStackTrace();
+            logger.error("Error reading road segments file: {}", filePath, e);
         }
     }
+    
 
     /**
      * Calculates the distance between two cities using the Haversine formula.
@@ -173,12 +206,12 @@ public class DataLoaderService {
     private void loadTrucks(TruckData truckData) {
         // Find the city by province name (case-insensitive)
         City location = cityRepository.findByProvinceIgnoreCase(truckData.location);
-
+    
         if (location == null) {
-            System.out.println("City not found for location: " + truckData.location);
+            logger.warn("City not found for location: {}", truckData.location);
             return;
         }
-
+    
         for (String code : truckData.codes) {
             Truck truck = new Truck();
             truck.setCode(code);
@@ -188,6 +221,7 @@ public class DataLoaderService {
             truck.setAvailable(true);
             truck.setAvailableFrom(new Date());
             truckRepository.save(truck);
+            logger.debug("Saved truck: {} of type {} at location {}", code, truckData.type, truckData.location);
         }
     }
 
@@ -202,62 +236,6 @@ public class DataLoaderService {
             this.capacity = capacity;
             this.location = location;
             this.codes = codes;
-        }
-    }
-
-    /**
-     * Loads package orders from a file and saves them to the database.
-     * @param filePath Path to the package orders data file.
-     */
-    public void loadPackageOrders(String filePath) {
-        try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                // Format: dd hh:mm, UG-Ori =>  UG-Des, Cant, IdCliente
-                String[] tokens = line.split(",");
-                String dateTimeStr = tokens[0].trim();
-                String[] dateTimeParts = dateTimeStr.split(" ");
-                String day = dateTimeParts[0];
-                String time = dateTimeParts[1];
-                String orderDateTimeStr = day + " " + time;
-
-                String[] routeTokens = tokens[1].split("=>");
-                String originUbigeo = routeTokens[0].trim();
-                String destinationUbigeo = routeTokens[1].trim();
-
-                int quantity = Integer.parseInt(tokens[2].trim());
-                String orderId = tokens[3].trim();
-
-                City origin = cityRepository.findById(originUbigeo).orElse(null);
-                City destination = cityRepository.findById(destinationUbigeo).orElse(null);
-
-                if (destination != null) {
-                    PackageOrder pkgOrder = new PackageOrder();
-                    pkgOrder.setOrderId(orderId);
-                    pkgOrder.setQuantity(quantity);
-                    pkgOrder.setDestination(destination);
-                    pkgOrder.setOrderDate(parseOrderDateTime(orderDateTimeStr));
-                    pkgOrder.setDeliveryDeadline(calculateDeadline(destination.getRegion(), pkgOrder.getOrderDate()));
-                    packageOrderRepository.save(pkgOrder);
-                }
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    /**
-     * Parses a date and time string into a Date object.
-     * @param dateStr Date and time string in the format "dd HH:mm".
-     * @return Parsed Date object.
-     */
-    private Date parseOrderDateTime(String dateStr) {
-        try {
-            SimpleDateFormat formatter = new SimpleDateFormat("dd HH:mm");
-            return formatter.parse(dateStr);
-        } catch (ParseException e) {
-            e.printStackTrace();
-            return new Date();
         }
     }
 

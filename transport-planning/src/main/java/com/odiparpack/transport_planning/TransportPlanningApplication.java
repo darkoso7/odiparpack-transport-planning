@@ -27,12 +27,10 @@ public class TransportPlanningApplication {
             // Load data
             String citiesFilePath = "data/cities.txt";
             String roadSegmentsFilePath = "data/road_segments.txt";
-            String packageOrdersFilePath = "data/package_orders.txt";
 
             dataLoaderService.loadCities(citiesFilePath);
             dataLoaderService.loadRoadSegments(roadSegmentsFilePath);
             dataLoaderService.loadTrucksFromData();
-            dataLoaderService.loadPackageOrders(packageOrdersFilePath);
             dataLoaderService.loadSalesData();
 
             // Run GLS algorithm

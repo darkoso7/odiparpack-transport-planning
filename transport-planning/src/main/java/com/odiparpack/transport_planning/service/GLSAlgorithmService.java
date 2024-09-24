@@ -74,6 +74,25 @@ public class GLSAlgorithmService {
         for (TransportationPlan plan : bestSolution) {
             transportationPlanRepository.save(plan);
         }
+
+        // Print final best solution and cost
+        System.out.println("Final best solution cost: " + bestCost);
+        printSolution(bestSolution);
+    }
+
+    private void printSolution(List<TransportationPlan> solution) {
+        for (TransportationPlan plan : solution) {
+            System.out.println("Truck: " + plan.getTruck().getCode());
+            System.out.println("Route:");
+            for (City city : plan.getRoute()) {
+                System.out.println(" - " + city.getProvince() + " (" + city.getUbigeo() + ")");
+            }
+            System.out.println("Deliveries:");
+            for (PackageOrder pkg : plan.getDeliveries()) {
+                System.out.println(" - Package " + pkg.getOrderId() + " to " + pkg.getDestination().getProvince() + " (" + pkg.getDestination().getUbigeo() + ")");
+            }
+            System.out.println();
+        }
     }
 
     private double calculateLambda(List<RoadSegment> roadSegments) {

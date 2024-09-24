@@ -17,12 +17,10 @@ public class DataController {
             // Specify the paths to your data files
             String citiesFilePath = "data/cities.txt";
             String roadSegmentsFilePath = "data/road_segments.txt";
-            String packageOrdersFilePath = "data/package_orders.txt";
 
             dataLoaderService.loadCities(citiesFilePath);
             dataLoaderService.loadRoadSegments(roadSegmentsFilePath);
             dataLoaderService.loadTrucksFromData();
-            dataLoaderService.loadPackageOrders(packageOrdersFilePath);
 
             return "Data loaded successfully.";
         } catch (Exception e) {
