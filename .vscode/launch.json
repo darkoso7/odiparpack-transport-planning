@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-TransportPlanningApplication<transport-planning>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.odiparpack.transport_planning.TransportPlanningApplication",
+            "projectName": "transport-planning",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}

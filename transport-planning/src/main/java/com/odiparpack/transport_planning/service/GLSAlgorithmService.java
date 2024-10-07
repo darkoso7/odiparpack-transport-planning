@@ -5,6 +5,8 @@ import org.springframework.stereotype.Service;
 import com.odiparpack.transport_planning.repository.*;
 import com.odiparpack.transport_planning.model.*;
 
+
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.text.SimpleDateFormat;
@@ -32,6 +34,8 @@ public class GLSAlgorithmService {
     private RoadNetwork roadNetwork;
 
     public void runGLS(Date simulationStartTime) {
+    public void runGLS(Date startDate, Date endDate) {
+        // Initialize data
         List<City> cities = cityRepository.findAll();
         List<RoadSegment> roadSegments = roadSegmentRepository.findAll();
         List<Truck> trucks = truckRepository.findAll();
@@ -53,6 +57,18 @@ public class GLSAlgorithmService {
         double temperature = 1000; // Temperatura inicial
         double coolingRate = 0.995; // Tasa de enfriamiento
         int maxIterations = 1000;
+    
+        // Initialize penalties
+        for (RoadSegment rs : roadSegments) {
+            penalties.put(rs, 0);
+        }
+    
+        // Generate initial solution
+        List<TransportationPlan> currentSolution = generateInitialSolution(trucks, packages);
+        List<TransportationPlan> bestSolution = currentSolution;
+        double bestCost = calculateObjectiveFunction(bestSolution);
+    
+        // GLS iterations
         int iteration = 0;
     
         // GLS con Simulated Annealing
@@ -72,6 +88,24 @@ public class GLSAlgorithmService {
     
             // Reducir la temperatura
             temperature *= coolingRate;
+        int maxIterations = 100;
+    
+        while (iteration < maxIterations) {
+            // Local Search
+            List<TransportationPlan> localOptimum = localSearch(currentSolution);
+    
+            // Update best solution
+            double localCost = calculateObjectiveFunction(localOptimum);
+            if (localCost < bestCost) {
+                bestSolution = localOptimum;
+                bestCost = localCost;
+            }
+    
+            // Update penalties
+            updatePenalties(localOptimum);
+    
+            // Move to next solution
+            currentSolution = localOptimum;
             iteration++;
     
             // Actualizar penalizaciones (GLS)
@@ -79,6 +113,8 @@ public class GLSAlgorithmService {
         }
     
         // Guardar la mejor solución encontrada
+    
+        // Save the best solution
         for (TransportationPlan plan : bestSolution) {
             transportationPlanRepository.save(plan);
         }
@@ -87,13 +123,52 @@ public class GLSAlgorithmService {
         System.out.println("Best solution total time: " + bestTime);
         printSolution(bestSolution);
     }
+    
+        // Print final best solution and cost
+        System.out.println("Final best solution cost: " + bestCost);
+        printSolutionWithTime(bestSolution, startDate, endDate);
+    }    
 
     // Construir la red de carreteras
     private void buildRoadNetwork(List<City> cities, List<RoadSegment> roadSegments) {
         for (RoadSegment segment : roadSegments) {
             roadNetwork.addRoadSegment(segment.getOrigin(), segment.getDestination(), segment);
+    private void printSolutionWithTime(List<TransportationPlan> solution, Date startDate, Date endDate) {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm");
+        for (TransportationPlan plan : solution) {
+            System.out.println("Truck: " + plan.getTruck().getCode());
+            System.out.println("Route:");
+            Date currentTime = plan.getTruck().getAvailableFrom();
+            for (int i = 0; i < plan.getRoute().size() - 1; i++) {
+                City origin = plan.getRoute().get(i);
+                City destination = plan.getRoute().get(i + 1);
+                RoadSegment roadSegment = roadSegmentRepository.findByOriginAndDestination(origin, destination);
+
+                // Calculate travel time
+                double distance = roadSegment.getDistance();
+                double speedLimit = roadSegment.getSpeedLimit();
+                double travelTimeHours = distance / speedLimit;
+                long travelTimeMs = (long) (travelTimeHours * 3600 * 1000);
+
+                // Set the end time for the current segment
+                Date arrivalTime = new Date(currentTime.getTime() + travelTimeMs);
+
+                // Print times for each segment
+                System.out.println(" - From " + origin.getProvince() + " (" + origin.getUbigeo() + ") to " + destination.getProvince() + " (" + destination.getUbigeo() + ")");
+                System.out.println("   Start time: " + sdf.format(currentTime) + ", Arrival time: " + sdf.format(arrivalTime));
+
+                // Update current time for next segment
+                currentTime = arrivalTime;
+            }
+
+            System.out.println("Deliveries:");
+            for (PackageOrder pkg : plan.getDeliveries()) {
+                System.out.println(" - Package " + pkg.getOrderId() + " to " + pkg.getDestination().getProvince() + " (" + pkg.getDestination().getUbigeo() + ")");
+            }
+            System.out.println();
         }
     }
+
 
     private double calculateLambda(List<RoadSegment> roadSegments) {
         double totalCost = 0;
@@ -250,79 +325,31 @@ public class GLSAlgorithmService {
     
         return nearestPackage;
     }
-    
-    
 
-    // Cálculo del camino más corto utilizando la red de carreteras y verificando bloqueos
-    private ShortestPathResult calculateShortestPathDistance(City origin, City destination, Date simulationStartTime) {
-        ShortestPathResult shortestPathResult = roadNetwork.calculateShortestPathCost(origin, destination, simulationStartTime);
-        return shortestPathResult;
-    }
-    
+    private double calculateDistance(City origin, City destination) {
+        // Use Haversine formula or any method to calculate distance
+        double lat1 = origin.getLatitude();
+        double lon1 = origin.getLongitude();
+        double lat2 = destination.getLatitude();
+        double lon2 = destination.getLongitude();
 
+        // Haversine formula
+        final int R = 6371; // Radius of the Earth in kilometers
+        double latDistance = Math.toRadians(lat2 - lat1);
+        double lonDistance = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(latDistance / 2) * Math.sin(latDistance / 2)
+                 + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+                 + Math.sin(lonDistance / 2) * Math.sin(lonDistance / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        double distance = R * c;
 
-    // Calcular el tiempo total de entrega considerando bloqueos, penalizaciones y fechas límite
-    private double calculateTotalDeliveryTime(List<TransportationPlan> solution, Date simulationStartTime) {
-        double totalTime = 0.0;
-
-        for (TransportationPlan tp : solution) {
-            List<City> route = tp.getRoute();
-            Date currentTime = new Date(simulationStartTime.getTime());
-
-            for (int i = 0; i < route.size() - 1; i++) {
-                City origin = route.get(i);
-                City destination = route.get(i + 1);
-                RoadSegment rs = roadSegmentRepository.findByOriginAndDestination(origin, destination);
-                if (rs != null && rs.isAvailableAt(currentTime)) { // Verificar bloqueos
-                    double time = rs.getDistance() / rs.getSpeedLimit();
-                    int penalty = penalties.getOrDefault(rs, 0);
-                    totalTime += time + lambda * penalty;
-                } else {
-                    // Si la carretera está bloqueada, aplicar penalización o buscar alternativa
-                    totalTime += 10000; // Penalización arbitraria por carretera bloqueada
-                }
-            }
-
-            // Penalización por entregas tardías
-            for (PackageOrder pkg : tp.getDeliveries()) {
-                Date estimatedDeliveryTime = estimateDeliveryTime(tp, pkg, simulationStartTime);
-                if (estimatedDeliveryTime.after(pkg.getDeliveryDeadline())) {
-                    totalTime += 10000 * (estimatedDeliveryTime.getTime() - pkg.getDeliveryDeadline().getTime()) / (1000 * 60 * 60);
-                }
-            }
-        }
-
-        return totalTime;
+        return distance;
     }
 
-    private Date estimateDeliveryTime(TransportationPlan tp, PackageOrder pkg, Date simulationStartTime) {
-        Date startTime = tp.getTruck().getAvailableFrom();
-        Date currentTime = new Date(startTime.getTime());
+    private List<TransportationPlan> localSearch(List<TransportationPlan> solution) {
+        // Implement local search strategies
+        // For example, swap deliveries between trucks, 2-opt on routes, etc.
 
-        List<City> route = tp.getRoute();
-        for (int i = 0; i < route.size() - 1; i++) {
-            City origin = route.get(i);
-            City destination = route.get(i + 1);
-            RoadSegment rs = roadSegmentRepository.findByOriginAndDestination(origin, destination);
-            if (rs != null) {
-                double distance = rs.getDistance();
-                double speedLimit = rs.getSpeedLimit();
-                double travelTimeHours = distance / speedLimit;
-
-                long travelTimeMs = (long) (travelTimeHours * 3600 * 1000);
-                currentTime = new Date(currentTime.getTime() + travelTimeMs);
-
-                if (destination.equals(pkg.getDestination())) {
-                    break;
-                }
-            }
-        }
-
-        return currentTime;
-    }
-
-    // Implementación del método faltante localSearch
-    private List<TransportationPlan> localSearch(List<TransportationPlan> solution, Date simulationStartTime) {
         List<TransportationPlan> newSolution = copyTransportationPlans(solution);
 
         // Ejemplo: Intentar intercambiar paquetes entre camiones
@@ -372,6 +399,98 @@ public class GLSAlgorithmService {
         tp1.getDeliveries().add(pkg2);
         tp2.getDeliveries().add(pkg1);
     }
+
+    private void updatePenalties(List<TransportationPlan> solution) {
+        // Identify features to penalize and update penalties map
+        // For example, penalize overused road segments
+        List<RoadSegment> overusedSegments = identifyOverusedSegments(solution);
+
+        for (RoadSegment rs : overusedSegments) {
+            int currentPenalty = penalties.getOrDefault(rs, 0);
+            penalties.put(rs, currentPenalty + 1);
+        }
+    }
+
+    private List<RoadSegment> identifyOverusedSegments(List<TransportationPlan> solution) {
+        Map<RoadSegment, Integer> segmentUsage = new HashMap<>();
+
+        for (TransportationPlan tp : solution) {
+            List<City> route = tp.getRoute();
+            for (int i = 0; i < route.size() - 1; i++) {
+                City origin = route.get(i);
+                City destination = route.get(i + 1);
+                RoadSegment rs = roadSegmentRepository.findByOriginAndDestination(origin, destination);
+                if (rs != null) {
+                    segmentUsage.put(rs, segmentUsage.getOrDefault(rs, 0) + 1);
+                }
+            }
+        }
+
+        // Identify segments used more than a threshold
+        int usageThreshold = 1; // This threshold can be adjusted
+        List<RoadSegment> overusedSegments = segmentUsage.entrySet().stream()
+            .filter(entry -> entry.getValue() > usageThreshold)
+            .map(Map.Entry::getKey)
+            .collect(Collectors.toList());
+
+        return overusedSegments;
+    }
+
+    private double calculateObjectiveFunction(List<TransportationPlan> solution) {
+        double cost = 0.0;
+    
+        for (TransportationPlan tp : solution) {
+            List<City> route = tp.getRoute();
+            for (int i = 0; i < route.size() - 1; i++) {
+                City origin = route.get(i);
+                City destination = route.get(i + 1);
+                RoadSegment rs = roadSegmentRepository.findByOriginAndDestination(origin, destination);
+                if (rs != null) {
+                    int penalty = penalties.getOrDefault(rs, 0);
+                    cost += rs.getCost() + (lambda * penalty);
+                }
+            }
+    
+            // Add penalties for late deliveries
+            for (PackageOrder pkg : tp.getDeliveries()) {
+                Date estimatedDeliveryTime = estimateDeliveryTime(tp, pkg);
+                if (estimatedDeliveryTime.after(pkg.getDeliveryDeadline())) {
+                    cost += 10000 * (estimatedDeliveryTime.getTime() - pkg.getDeliveryDeadline().getTime()) / (1000 * 60 * 60);
+                }
+            }
+        }
+    
+        return cost;
+    }
+    
+
+    private Date estimateDeliveryTime(TransportationPlan tp, PackageOrder pkg) {
+        Date currentTime = new Date(tp.getTruck().getAvailableFrom().getTime());
+    
+        List<City> route = tp.getRoute();
+        for (int i = 0; i < route.size() - 1; i++) {
+            City origin = route.get(i);
+            City destination = route.get(i + 1);
+            RoadSegment rs = roadSegmentRepository.findByOriginAndDestination(origin, destination);
+            if (rs != null) {
+                double distance = rs.getDistance();
+                double speedLimit = rs.getSpeedLimit();
+                double travelTimeHours = distance / speedLimit;
+    
+                // Convert travel time to milliseconds and add to current time
+                long travelTimeMs = (long) (travelTimeHours * 3600 * 1000);
+                currentTime = new Date(currentTime.getTime() + travelTimeMs);
+    
+                // Check if destination is the package destination
+                if (destination.equals(pkg.getDestination())) {
+                    break;
+                }
+            }
+        }
+    
+        return currentTime;
+    }
+    
 
     private List<TransportationPlan> copyTransportationPlans(List<TransportationPlan> originalPlans) {
         List<TransportationPlan> copiedPlans = new ArrayList<>();
