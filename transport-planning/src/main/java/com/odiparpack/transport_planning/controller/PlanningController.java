@@ -14,7 +14,7 @@ public class PlanningController {
     @GetMapping("/run")
     public String runGLSAlgorithm() {
         try {
-            glsAlgorithmService.runGLS();
+            glsAlgorithmService.runGLS(null);
             return "GLS Algorithm executed successfully.";
         } catch (Exception e) {
             e.printStackTrace();

@@ -5,7 +5,6 @@ import org.springframework.stereotype.Service;
 import com.odiparpack.transport_planning.repository.*;
 import com.odiparpack.transport_planning.model.*;
 import org.springframework.core.io.Resource;
-import org.springframework.core.io.ResourceLoader;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.core.io.support.ResourcePatternResolver;
 
@@ -36,11 +35,10 @@ public class DataLoaderService {
     @Autowired
     private PackageOrderRepository packageOrderRepository;
 
-    @Autowired
-    private ResourceLoader resourceLoader;
-
     private static final Logger logger = LoggerFactory.getLogger(DataLoaderService.class);
 
+    // Updated format to handle both date and time
+    private final SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMddHHmm");
 
     /**
      * Loads cities from a file and saves them to the database.
@@ -105,11 +103,20 @@ public class DataLoaderService {
                     RoadSegment rs = new RoadSegment();
                     rs.setOrigin(origin);
                     rs.setDestination(destination);
-                    rs.setDistance(calculateDistance(origin, destination));
-                    rs.setSpeedLimit(getSpeedLimit(origin.getRegion(), destination.getRegion()));
-                    rs.setCost(0); // Initial cost, can be updated later
+
+                    // Calculate distance and speed limit
+                    double distance = calculateDistance(origin, destination);
+                    double speedLimit = getSpeedLimit(origin.getRegion(), destination.getRegion());
+
+                    rs.setDistance(distance);
+                    rs.setSpeedLimit(speedLimit);
+
+                    // Calculate initial cost as time (distance / speedLimit)
+                    double timeCost = distance / speedLimit;
+                    rs.setCost((int) Math.round(timeCost)); // Rounding to the nearest integer
+
                     roadSegmentRepository.save(rs);
-                    logger.debug("Saved road segment: {} => {}", originUbigeo, destinationUbigeo);
+                    logger.debug("Saved road segment: {} => {} with cost: {}", originUbigeo, destinationUbigeo, rs.getCost());
                 } else {
                     if (origin == null) {
                         logger.warn("Origin city not found for UBIGEO: {} at line {}", originUbigeo, lineNumber);
@@ -395,4 +402,151 @@ public class DataLoaderService {
         }
     }
     
+    public void loadBlockages() {
+        try {
+            // Adjust the path to your data directory
+            String dataDir = "classpath:data/";
+            Resource[] resources = getResources(dataDir + "c.1inf54.24-2.bloqueo.*"); // Loads all blockage files
+
+            for (Resource resource : resources) {
+                logger.info("Loading blockage file: {}", resource.getFilename());
+                loadBlockagesFromFile(resource);
+            }
+        } catch (IOException e) {
+            logger.error("Error loading blockage files", e);
+        }
+    }
+
+    /**
+     * Loads a blockage file and applies the blockages to the road segments.
+     * @param resource Resource object representing the blockage file.
+     */
+    public void loadBlockagesFromFile(Resource resource) {
+        SimpleDateFormat dateFormat = new SimpleDateFormat("MMdd,HH:mm");
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(resource.getInputStream()))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] tokens = line.split(";");
+                if (tokens.length != 2) {
+                    logger.warn("Invalid line format: {}", line);
+                    continue;
+                }
+
+                String roadSegmentPart = tokens[0].trim(); // "250301 => 220501"
+                String blockagePeriodPart = tokens[1].trim(); // "0101,13:32==0119,10:39"
+
+                // Parse road segment
+                String[] roadTokens = roadSegmentPart.split("=>");
+                if (roadTokens.length != 2) {
+                    logger.warn("Invalid road segment format: {}", roadSegmentPart);
+                    continue;
+                }
+                String originUbigeo = roadTokens[0].trim();
+                String destinationUbigeo = roadTokens[1].trim();
+
+                // Find origin and destination cities
+                City origin = cityRepository.findById(originUbigeo).orElse(null);
+                City destination = cityRepository.findById(destinationUbigeo).orElse(null);
+
+                if (origin == null || destination == null) {
+                    logger.warn("Cities not found for UBIGEOs: {} => {}", originUbigeo, destinationUbigeo);
+                    continue;
+                }
+
+                // Find the road segment
+                RoadSegment roadSegment = roadSegmentRepository.findByOriginAndDestination(origin, destination);
+                if (roadSegment == null) {
+                    logger.warn("Road segment not found: {} => {}", originUbigeo, destinationUbigeo);
+                    continue;
+                }
+
+                // Parse blockage start and end times
+                String[] dateTokens = blockagePeriodPart.split("==");
+                if (dateTokens.length != 2) {
+                    logger.warn("Invalid blockage period format: {}", blockagePeriodPart);
+                    continue;
+                }
+                Date startDate = parseBlockageDate(dateTokens[0], dateFormat);
+                Date endDate = parseBlockageDate(dateTokens[1], dateFormat);
+
+                if (startDate != null && endDate != null) {
+                    // Add blockage period to the road segment
+                    roadSegment.addBlockagePeriod(startDate, endDate);
+                    roadSegmentRepository.save(roadSegment);
+                    logger.info("Added blockage to road segment {} => {} from {} to {}", originUbigeo, destinationUbigeo, startDate, endDate);
+                }
+            }
+        } catch (IOException e) {
+            logger.error("Error reading blockage file: {}", resource.getFilename(), e);
+        }
+    }
+
+    private Date parseBlockageDate(String dateStr, SimpleDateFormat dateFormat) {
+        try {
+            Calendar cal = Calendar.getInstance();
+            Date date = dateFormat.parse(dateStr);
+            cal.setTime(date);
+            cal.set(Calendar.YEAR, Calendar.getInstance().get(Calendar.YEAR)); // Set current year
+            return cal.getTime();
+        } catch (ParseException e) {
+            logger.error("Error parsing date: {}", dateStr, e);
+            return null;
+        }
+    }
+
+    /**
+     * Loads scheduled breakdowns for each truck from the provided file.
+     * The file format is:
+     * 202403011230:A001:1
+     * Where:
+     * - `202403011230` is the date and time (yyyyMMddHHmm)
+     * - `A001` is the truck code
+     * - `1` is the breakdown type (1: Moderado, 2: Grave, 3: Siniestro)
+     * 
+     * @param filePath The path to the breakdown schedule file.
+     */
+    public void loadScheduledBreakdowns(String filePath) {
+        try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] tokens = line.split(":");
+                if (tokens.length != 3) {
+                    logger.warn("Invalid line format: {}", line);
+                    continue;
+                }
+
+                // Parse date and time, truck code, and breakdown type
+                String dateStr = tokens[0].trim();
+                String truckCode = tokens[1].trim();
+                int breakdownType = Integer.parseInt(tokens[2].trim());
+
+                // Parse the breakdown start date and time
+                Date breakdownStartDate = sdf.parse(dateStr);
+                Calendar cal = Calendar.getInstance();
+                cal.setTime(breakdownStartDate);
+
+                // Assuming breakdown duration is 2 days
+                cal.add(Calendar.DAY_OF_MONTH, 2);
+                Date breakdownEndDate = cal.getTime();
+
+                // Find the truck by its code
+                Truck truck = truckRepository.findById(truckCode).orElse(null);
+                if (truck != null) {
+                    // Set the truck's breakdown details
+                    truck.setBrokenDown(true);
+                    truck.setBreakdownType(breakdownType);
+                    truck.setBreakdownStartTime(breakdownStartDate);
+                    truck.setBreakdownEndTime(breakdownEndDate);
+                    truckRepository.save(truck);
+
+                    logger.info("Scheduled breakdown for truck {} from {} to {} with type {}", 
+                        truckCode, breakdownStartDate, breakdownEndDate, breakdownType);
+                } else {
+                    logger.warn("Truck with code {} not found", truckCode);
+                }
+            }
+        } catch (IOException | ParseException e) {
+            logger.error("Error loading scheduled breakdowns", e);
+        }
+    }
 }

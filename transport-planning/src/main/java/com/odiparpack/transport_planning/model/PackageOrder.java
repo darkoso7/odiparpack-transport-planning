@@ -12,7 +12,7 @@ public class PackageOrder {
     private int quantity;
 
     @ManyToOne
-    private City origin; // Add origin city
+    private City origin;
 
     @ManyToOne
     private City destination;
