@@ -12,12 +12,9 @@ import com.odiparpack.transport_planning.service.DataLoaderService;
 import com.odiparpack.transport_planning.service.GLSAlgorithmService;
 
 import org.jfree.chart.ChartFactory;
-import org.jfree.chart.ChartPanel;
 import org.jfree.chart.ChartUtils;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.plot.PlotOrientation;
-import org.jfree.chart.plot.XYPlot;
-import org.jfree.chart.ui.ApplicationFrame;
 import org.jfree.data.xy.XYSeries;
 import org.jfree.data.xy.XYSeriesCollection;
 
@@ -25,13 +22,11 @@ import java.io.File;
 import java.io.IOException;
 import java.util.List;
 
-import java.awt.*;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryUsage;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.List;
 
 @SpringBootApplication
 public class TransportPlanningApplication {
