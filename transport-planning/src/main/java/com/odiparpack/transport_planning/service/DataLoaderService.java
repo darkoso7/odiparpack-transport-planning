@@ -113,7 +113,7 @@ public class DataLoaderService {
 
                     // Calculate initial cost as time (distance / speedLimit)
                     double timeCost = distance / speedLimit;
-                    rs.setCost((int) Math.round(timeCost)); // Rounding to the nearest integer
+                    rs.setCost(timeCost); // Rounding to the nearest integer
 
                     roadSegmentRepository.save(rs);
                     logger.debug("Saved road segment: {} => {} with cost: {}", originUbigeo, destinationUbigeo, rs.getCost());

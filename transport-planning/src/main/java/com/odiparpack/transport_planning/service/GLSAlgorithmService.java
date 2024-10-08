@@ -13,29 +13,13 @@ import java.text.SimpleDateFormat;
 public class GLSAlgorithmService {
 
     @Autowired
-    private CityRepository cityRepository;
-
-    @Autowired
-    private RoadSegmentRepository roadSegmentRepository;
-
-    @Autowired
-    private TruckRepository truckRepository;
-
-    @Autowired
-    private PackageOrderRepository packageOrderRepository;
-
-    @Autowired
     private TransportationPlanRepository transportationPlanRepository;
 
     private Map<RoadSegment, Integer> penalties;
     private double lambda;
     private RoadNetwork roadNetwork;
 
-    public void runGLS(Date simulationStartTime) {
-        List<City> cities = cityRepository.findAll();
-        List<RoadSegment> roadSegments = roadSegmentRepository.findAll();
-        List<Truck> trucks = truckRepository.findAll();
-        List<PackageOrder> packages = packageOrderRepository.findAll();
+    public void runGLS(List<City> cities, List<RoadSegment> roadSegments, List<Truck> trucks, List<PackageOrder> packages, Date simulationStartTime) {
         
         penalties = new HashMap<>();
         lambda = calculateLambda(roadSegments);
@@ -45,9 +29,9 @@ public class GLSAlgorithmService {
         buildRoadNetwork(cities, roadSegments);
 
         // Solución inicial
-        List<TransportationPlan> currentSolution = generateInitialSolution(trucks, packages, simulationStartTime);
+        List<TransportationPlan> currentSolution = generateInitialSolution(trucks, packages, simulationStartTime, roadSegments);
         List<TransportationPlan> bestSolution = new ArrayList<>(currentSolution);
-        double bestTime = calculateTotalDeliveryTime(bestSolution, simulationStartTime);
+        double bestTime = calculateTotalDeliveryTime(bestSolution, roadSegments, simulationStartTime);
     
         // Parámetros de Simulated Annealing
         double temperature = 1000; // Temperatura inicial
@@ -58,8 +42,8 @@ public class GLSAlgorithmService {
         // GLS con Simulated Annealing
         while (iteration < maxIterations && temperature > 1) {
             // Búsqueda local
-            List<TransportationPlan> newSolution = localSearch(currentSolution, simulationStartTime);
-            double newTime = calculateTotalDeliveryTime(newSolution, simulationStartTime);
+            List<TransportationPlan> newSolution = localSearch(currentSolution, simulationStartTime, roadSegments);
+            double newTime = calculateTotalDeliveryTime(newSolution, roadSegments, simulationStartTime);
     
             // Comparar con la mejor solución
             if (acceptSolution(newTime, bestTime, temperature)) {
@@ -75,8 +59,9 @@ public class GLSAlgorithmService {
             iteration++;
     
             // Actualizar penalizaciones (GLS)
-            updatePenalties(newSolution);
+            updatePenalties(newSolution, roadSegments);
         }
+        System.out.println("Max iterations: " + iteration);
     
         // Guardar la mejor solución encontrada
         for (TransportationPlan plan : bestSolution) {
@@ -85,7 +70,7 @@ public class GLSAlgorithmService {
     
         // Mostrar la solución final
         System.out.println("Best solution total time: " + bestTime);
-        printSolution(bestSolution);
+        printSolution(bestSolution, roadSegments);
     }
 
     // Construir la red de carreteras
@@ -112,8 +97,8 @@ public class GLSAlgorithmService {
         return Math.random() < Math.exp((currentTime - newTime) / temperature);
     }
 
-    private void updatePenalties(List<TransportationPlan> solution) {
-        List<RoadSegment> overusedSegments = identifyOverusedSegments(solution);
+    private void updatePenalties(List<TransportationPlan> solution, List<RoadSegment> roadSegments) {
+        List<RoadSegment> overusedSegments = identifyOverusedSegments(solution, roadSegments);
         
         for (RoadSegment rs : overusedSegments) {
             int currentPenalty = penalties.getOrDefault(rs, 0);
@@ -121,7 +106,7 @@ public class GLSAlgorithmService {
         }
     }
 
-    private List<RoadSegment> identifyOverusedSegments(List<TransportationPlan> solution) {
+    private List<RoadSegment> identifyOverusedSegments(List<TransportationPlan> solution, List<RoadSegment> roadSegments) {
         Map<RoadSegment, Integer> segmentUsage = new HashMap<>();
 
         for (TransportationPlan tp : solution) {
@@ -129,7 +114,7 @@ public class GLSAlgorithmService {
             for (int i = 0; i < route.size() - 1; i++) {
                 City origin = route.get(i);
                 City destination = route.get(i + 1);
-                RoadSegment rs = roadSegmentRepository.findByOriginAndDestination(origin, destination);
+                RoadSegment rs = findRoadSegment(roadSegments, origin, destination);
                 if (rs != null) {
                     segmentUsage.put(rs, segmentUsage.getOrDefault(rs, 0) + 1);
                 }
@@ -144,7 +129,7 @@ public class GLSAlgorithmService {
     }
 
     // Método que genera la solución inicial, considerando bloqueos, mantenimientos y averías
-    private List<TransportationPlan> generateInitialSolution(List<Truck> trucks, List<PackageOrder> packages, Date simulationStartTime) {
+    private List<TransportationPlan> generateInitialSolution(List<Truck> trucks, List<PackageOrder> packages, Date simulationStartTime, List<RoadSegment> roadSegments) {
         List<TransportationPlan> plans = new ArrayList<>();
 
         packages.sort(Comparator.comparing(PackageOrder::getDeliveryDeadline));
@@ -184,7 +169,7 @@ public class GLSAlgorithmService {
             }
 
             if (!assignedPackages.isEmpty()) {
-                List<City> route = planRouteUsingNetwork(truck.getCurrentLocation(), assignedPackages, simulationStartTime);
+                List<City> route = planRouteUsingNetwork(truck.getCurrentLocation(), assignedPackages, simulationStartTime, roadSegments);
 
                 TransportationPlan plan = new TransportationPlan();
                 plan.setTruck(truck);
@@ -198,14 +183,14 @@ public class GLSAlgorithmService {
     }
 
     // Planificar la ruta utilizando la red de carreteras y considerando bloqueos
-    private List<City> planRouteUsingNetwork(City startLocation, List<PackageOrder> packages, Date simulationStartTime) {
+    private List<City> planRouteUsingNetwork(City startLocation, List<PackageOrder> packages, Date simulationStartTime, List<RoadSegment> roadSegments) {
         List<City> route = new ArrayList<>();
         route.add(startLocation);
         City currentCity = startLocation;
         List<PackageOrder> remainingPackages = new ArrayList<>(packages);
     
         while (!remainingPackages.isEmpty()) {
-            PackageOrder nextPackage = findNearestPackageUsingNetwork(currentCity, remainingPackages, simulationStartTime);
+            PackageOrder nextPackage = findNearestPackageUsingNetwork(currentCity, remainingPackages, simulationStartTime, roadSegments);
             if (nextPackage == null) {
                 break;
             }
@@ -230,7 +215,7 @@ public class GLSAlgorithmService {
     
     
     // Encontrar el paquete más cercano utilizando la red de carreteras, considerando bloqueos
-    private PackageOrder findNearestPackageUsingNetwork(City currentCity, List<PackageOrder> packages, Date simulationStartTime) {
+    private PackageOrder findNearestPackageUsingNetwork(City currentCity, List<PackageOrder> packages, Date simulationStartTime, List<RoadSegment> roadSegments) {
         PackageOrder nearestPackage = null;
         double minDistance = Double.MAX_VALUE;
     
@@ -263,7 +248,7 @@ public class GLSAlgorithmService {
 
 
     // Calcular el tiempo total de entrega considerando bloqueos, penalizaciones y fechas límite
-    private double calculateTotalDeliveryTime(List<TransportationPlan> solution, Date simulationStartTime) {
+    private double calculateTotalDeliveryTime(List<TransportationPlan> solution, List<RoadSegment> roadSegments, Date simulationStartTime) {
         double totalTime = 0.0;
 
         for (TransportationPlan tp : solution) {
@@ -273,7 +258,7 @@ public class GLSAlgorithmService {
             for (int i = 0; i < route.size() - 1; i++) {
                 City origin = route.get(i);
                 City destination = route.get(i + 1);
-                RoadSegment rs = roadSegmentRepository.findByOriginAndDestination(origin, destination);
+                RoadSegment rs = findRoadSegment(roadSegments, origin, destination);
                 if (rs != null && rs.isAvailableAt(currentTime)) { // Verificar bloqueos
                     double time = rs.getDistance() / rs.getSpeedLimit();
                     int penalty = penalties.getOrDefault(rs, 0);
@@ -286,7 +271,7 @@ public class GLSAlgorithmService {
 
             // Penalización por entregas tardías
             for (PackageOrder pkg : tp.getDeliveries()) {
-                Date estimatedDeliveryTime = estimateDeliveryTime(tp, pkg, simulationStartTime);
+                Date estimatedDeliveryTime = estimateDeliveryTime(tp, pkg, simulationStartTime, roadSegments);
                 if (estimatedDeliveryTime.after(pkg.getDeliveryDeadline())) {
                     totalTime += 10000 * (estimatedDeliveryTime.getTime() - pkg.getDeliveryDeadline().getTime()) / (1000 * 60 * 60);
                 }
@@ -297,7 +282,7 @@ public class GLSAlgorithmService {
     }
     
 
-    private Date estimateDeliveryTime(TransportationPlan tp, PackageOrder pkg, Date simulationStartTime) {
+    private Date estimateDeliveryTime(TransportationPlan tp, PackageOrder pkg, Date simulationStartTime, List<RoadSegment> roadSegments) {
         Date startTime = tp.getTruck().getAvailableFrom();
         Date currentTime = new Date(startTime.getTime());
 
@@ -305,7 +290,7 @@ public class GLSAlgorithmService {
         for (int i = 0; i < route.size() - 1; i++) {
             City origin = route.get(i);
             City destination = route.get(i + 1);
-            RoadSegment rs = roadSegmentRepository.findByOriginAndDestination(origin, destination);
+            RoadSegment rs = findRoadSegment(roadSegments, origin, destination);
             if (rs != null) {
                 double distance = rs.getDistance();
                 double speedLimit = rs.getSpeedLimit();
@@ -325,7 +310,7 @@ public class GLSAlgorithmService {
     
 
     // Implementación del método faltante localSearch
-    private List<TransportationPlan> localSearch(List<TransportationPlan> solution, Date simulationStartTime) {
+    private List<TransportationPlan> localSearch(List<TransportationPlan> solution, Date simulationStartTime, List<RoadSegment> roadSegments) {
         List<TransportationPlan> newSolution = copyTransportationPlans(solution);
 
         // Ejemplo: Intentar intercambiar paquetes entre camiones
@@ -343,8 +328,8 @@ public class GLSAlgorithmService {
                         if (canSwapPackages(tp1, pkg1, tp2, pkg2)) {
                             swapPackages(tp1, pkg1, tp2, pkg2);
                             // Recalcular las rutas y el tiempo de entrega utilizando roadNetwork
-                            tp1.setRoute(planRouteUsingNetwork(tp1.getTruck().getCurrentLocation(), tp1.getDeliveries(), simulationStartTime));
-                            tp2.setRoute(planRouteUsingNetwork(tp2.getTruck().getCurrentLocation(), tp2.getDeliveries(), simulationStartTime));
+                            tp1.setRoute(planRouteUsingNetwork(tp1.getTruck().getCurrentLocation(), tp1.getDeliveries(), simulationStartTime, roadSegments));
+                            tp2.setRoute(planRouteUsingNetwork(tp2.getTruck().getCurrentLocation(), tp2.getDeliveries(), simulationStartTime, roadSegments));
                             break;
                         }
                     }
@@ -388,7 +373,7 @@ public class GLSAlgorithmService {
         return copiedPlans;
     }
 
-    private void printSolution(List<TransportationPlan> solution) {
+    private void printSolution(List<TransportationPlan> solution, List<RoadSegment> roadSegments) {
         SimpleDateFormat sdf = new SimpleDateFormat("dd/MM/yyyy HH:mm");
         Date initialStartDate = new Date(); // Hora de inicio para la simulación
     
@@ -408,7 +393,7 @@ public class GLSAlgorithmService {
             for (int i = 0; i < route.size() - 1; i++) {
                 City origin = route.get(i);
                 City destination = route.get(i + 1);
-                RoadSegment rs = roadSegmentRepository.findByOriginAndDestination(origin, destination);
+                RoadSegment rs = findRoadSegment(roadSegments, origin, destination);
     
                 if (rs != null) {
                     System.out.println(" - Saliendo de " + origin.getProvince() + " (" + origin.getUbigeo() + ") a las " + sdf.format(currentTime));
@@ -444,6 +429,13 @@ public class GLSAlgorithmService {
         }
     }
     
-    
+    private RoadSegment findRoadSegment(List<RoadSegment> roadSegments, City origin, City destination) {
+        for (RoadSegment rs : roadSegments) {
+            if (rs.getOrigin().equals(origin) && rs.getDestination().equals(destination)) {
+                return rs;
+            }
+        }
+        return null;
+    }
     
 }

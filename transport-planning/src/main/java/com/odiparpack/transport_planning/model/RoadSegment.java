@@ -22,7 +22,7 @@ public class RoadSegment {
 
     private double distance;
     private double speedLimit;
-    private int cost; // Costo del segmento en tiempo o valor monetario
+    private double cost; // Costo del segmento en tiempo o valor monetario
 
     @ElementCollection(fetch = FetchType.EAGER) // Change fetch type to EAGER
     @CollectionTable(name = "blockage_periods", joinColumns = @JoinColumn(name = "road_segment_id"))
